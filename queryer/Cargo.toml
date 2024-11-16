@@ -1,0 +1,21 @@
+[package]
+name = "queryer"
+version = "0.1.0"
+edition = "2021"
+
+[[example]]
+name = "dialect"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+anyhow = { workspace = true }
+polars = { workspace = true }
+reqwest = { workspace = true }
+sqlparser = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+
+[dev-dependencies]
+tokio = { version = "1.35.1", features = ["full"] }
+tracing-subscriber = "0.3.18"

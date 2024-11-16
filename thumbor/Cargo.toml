@@ -1,0 +1,28 @@
+[package]
+name = "thumbor"
+version = "0.1.0"
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+anyhow = { workspace = true }
+axum = { workspace = true }
+base64 = { workspace = true }
+bytes = { workspace = true }
+image = { workspace = true }
+lazy_static = { workspace = true }
+lru = { workspace = true }
+percent-encoding = { workspace = true }
+photon-rs = { workspace = true }
+prost = { workspace = true }
+reqwest = { workspace = true }
+serde = { workspace = true }
+tokio = { workspace = true }
+tower = { workspace = true }
+tower-http = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+
+[build-dependencies]
+prost-build = "0.12.3"
