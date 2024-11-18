@@ -1,11 +1,9 @@
 use anyhow::{anyhow, Result};
 use polars::prelude::*;
 use sqlparser::ast::{
-    BinaryOperator as SqlBinaryOperator, Expr as SqlExpr, Offset as SqlOffset, OrderByExpr, Select,
+    BinaryOperator as SqlBinaryOperator, Expr as SqlExpr, Offset as SqlOffset, OrderByExpr,
     SelectItem, SetExpr, Statement, TableFactor, TableWithJoins, Value as SqlValue,
-    WildcardAdditionalOptions,
 };
-use std::sync::Arc;
 
 // SQL 抽象语法树结构
 pub struct Sql<'a> {
@@ -24,7 +22,6 @@ pub struct Projection<'a>(pub(crate) &'a SelectItem);
 pub struct Source<'a>(pub(crate) &'a [TableWithJoins]);
 pub struct Order<'a>(pub(crate) &'a OrderByExpr);
 pub struct Offset<'a>(pub(crate) &'a SqlOffset);
-pub struct Limit<'a>(pub(crate) &'a SqlExpr);
 pub struct Value(pub(crate) SqlValue);
 
 // Convert SqlValue to LiteralValue
@@ -41,11 +38,7 @@ impl TryFrom<Value> for LiteralValue {
                 }
             }
             SqlValue::SingleQuotedString(s) | SqlValue::DoubleQuotedString(s) => {
-                let small_str: PlSmallStr = s
-                    .as_str()
-                    .try_into()
-                    .map_err(|_| anyhow!("String too long for PlSmallStr"))?;
-                Ok(LiteralValue::String(small_str))
+                Ok(LiteralValue::String(s.into()))
             }
             SqlValue::Boolean(b) => Ok(LiteralValue::Boolean(b)),
             SqlValue::Null => Ok(LiteralValue::Null),
@@ -91,30 +84,23 @@ impl<'a> From<Offset<'a>> for i64 {
     }
 }
 
-// Convert Limit
-impl<'a> TryFrom<Limit<'a>> for usize {
-    type Error = anyhow::Error;
-
-    fn try_from(limit: Limit<'a>) -> Result<Self, Self::Error> {
-        match limit.0 {
-            SqlExpr::Value(SqlValue::Number(v, _)) => Ok(v.parse()?),
-            _ => Err(anyhow!("Limit must be a number")),
-        }
-    }
-}
-
 // Convert Source
 impl<'a> TryFrom<Source<'a>> for &'a str {
     type Error = anyhow::Error;
 
     fn try_from(source: Source<'a>) -> Result<Self, Self::Error> {
         if source.0.len() != 1 {
-            return Err(anyhow!("Only single table queries are supported"));
+            return Err(anyhow!("Only support single table"));
         }
 
-        match &source.0[0].relation {
-            TableFactor::Table { name, .. } => Ok(&name.0[0].value),
-            _ => Err(anyhow!("Only table sources are supported")),
+        let table = &source.0[0];
+        if !table.joins.is_empty() {
+            return Err(anyhow!("Only support single table without joins"));
+        }
+
+        match &table.relation {
+            TableFactor::Table { name, .. } => Ok(&name.0.first().unwrap().value),
+            _ => Err(anyhow!("Only support table")),
         }
     }
 }
@@ -124,10 +110,11 @@ impl<'a> TryFrom<Order<'a>> for (String, bool) {
     type Error = anyhow::Error;
 
     fn try_from(order: Order<'a>) -> Result<Self, Self::Error> {
-        let asc = order.0.asc.unwrap_or(true);
-        match &order.0.expr {
-            SqlExpr::Identifier(ident) => Ok((ident.value.clone(), asc)),
-            _ => Err(anyhow!("Order by only supports column names")),
+        let expr = &order.0.expr;
+        let asc = !order.0.asc.unwrap_or(true);
+        match expr {
+            SqlExpr::Identifier(id) => Ok((id.value.clone(), asc)),
+            _ => Err(anyhow!("Order by only support identifier")),
         }
     }
 }
@@ -139,21 +126,12 @@ impl<'a> TryFrom<Projection<'a>> for Expr {
     fn try_from(proj: Projection<'a>) -> Result<Self, Self::Error> {
         match proj.0 {
             SelectItem::UnnamedExpr(expr) => Expression(Box::new(expr.clone())).try_into(),
-            SelectItem::ExprWithAlias { expr, alias } => Ok(Expression(Box::new(expr.clone()))
-                .try_into::<Expr>()?
-                .alias(&alias.value)),
-            SelectItem::Wildcard(WildcardAdditionalOptions {
-                opt_except,
-                opt_exclude,
-                ..
-            }) => {
-                if opt_except.is_some() || opt_exclude.is_some() {
-                    Err(anyhow!("EXCEPT and EXCLUDE in wildcard are not supported"))
-                } else {
-                    Ok(col("*"))
-                }
+            SelectItem::ExprWithAlias { expr, alias } => {
+                let expr: Expr = Expression(Box::new(expr.clone())).try_into()?;
+                Ok(expr.alias(&alias.value))
             }
-            _ => Err(anyhow!("Projection type not supported")),
+            SelectItem::Wildcard(_) => Ok(col("*")),
+            _ => Err(anyhow!("Projection not supported")),
         }
     }
 }
@@ -165,36 +143,32 @@ impl TryFrom<Expression> for Expr {
     fn try_from(expr: Expression) -> Result<Self, Self::Error> {
         match *expr.0 {
             SqlExpr::BinaryOp { left, op, right } => {
-                let left: Expr = Expression(left).try_into()?;
-                let right: Expr = Expression(right).try_into()?;
-                match Operation(op).try_into()? {
-                    Operator::Plus => Ok(left + right),
-                    Operator::Minus => Ok(left - right),
-                    Operator::Multiply => Ok(left * right),
-                    Operator::Divide => Ok(left / right),
-                    Operator::Modulus => Ok(left % right),
-                    Operator::Gt => Ok(left.gt(right)),
-                    Operator::Lt => Ok(left.lt(right)),
-                    Operator::GtEq => Ok(left.gt_eq(right)),
-                    Operator::LtEq => Ok(left.lt_eq(right)),
-                    Operator::Eq => Ok(left.eq(right)),
-                    Operator::NotEq => Ok(left.neq(right)),
-                    Operator::And => Ok(left.and(right)),
-                    Operator::Or => Ok(left.or(right)),
-                    Operator::TrueDivide => Ok(left / right),
-                    Operator::EqValidity => Ok(left.eq(right)),
-                    Operator::NotEqValidity => Ok(left.neq(right)),
-                    Operator::FloorDivide => Ok((left / right).cast(DataType::Int64)),
-                    Operator::Xor => Ok(left.xor(right)),
-                    Operator::LogicalAnd => Ok(left.and(right)),
-                    Operator::LogicalOr => Ok(left.or(right)),
-                }
+                let l: Expr = Expression(left).try_into()?;
+                let r: Expr = Expression(right).try_into()?;
+                let op = Operation(op).try_into()?;
+                Ok(match op {
+                    Operator::Plus => l + r,
+                    Operator::Minus => l - r,
+                    Operator::Multiply => l * r,
+                    Operator::Divide => l / r,
+                    Operator::Modulus => l % r,
+                    Operator::Gt => l.gt(r),
+                    Operator::Lt => l.lt(r),
+                    Operator::GtEq => l.gt_eq(r),
+                    Operator::LtEq => l.lt_eq(r),
+                    Operator::Eq => l.eq(r),
+                    Operator::NotEq => l.neq(r),
+                    Operator::And => l.and(r),
+                    Operator::Or => l.or(r),
+                    _ => return Err(anyhow!("Operator not supported")),
+                })
             }
             SqlExpr::Identifier(id) => Ok(col(&id.value)),
-            SqlExpr::Value(v) => Ok(lit(LiteralValue::try_from(Value(v))?)),
-            SqlExpr::Wildcard => Ok(col("*")),
-            SqlExpr::IsNull(expr) => Ok(Expression(expr).try_into::<Expr>()?.is_null()),
-            v => Err(anyhow!("Expression type not supported: {:?}", v)),
+            SqlExpr::Value(v) => {
+                let value: LiteralValue = Value(v).try_into()?;
+                Ok(lit(value))
+            }
+            v => Err(anyhow!("Expression {} not supported", v)),
         }
     }
 }
@@ -205,51 +179,52 @@ impl<'a> TryFrom<&'a Statement> for Sql<'a> {
 
     fn try_from(sql: &'a Statement) -> Result<Self, Self::Error> {
         match sql {
-            Statement::Query(query) => {
-                let Select {
-                    from: table_with_joins,
-                    selection: where_clause,
-                    projection,
-                    ..
-                } = match &*query.body {
-                    SetExpr::Select(statement) => statement.as_ref(),
-                    _ => return Err(anyhow!("Only SELECT queries are supported")),
-                };
-
-                let source = Source(table_with_joins).try_into()?;
-
-                let mut selection = Vec::with_capacity(projection.len());
-                for p in projection {
-                    selection.push(Projection(p).try_into()?);
-                }
-
-                let condition = where_clause
-                    .as_ref()
-                    .map(|expr| Expression(Box::new(expr.clone())).try_into())
-                    .transpose()?;
+            Statement::Query(q) => {
+                let offset = q.offset.as_ref().map(|v| Offset(v).into());
+                let limit = q.limit.as_ref().and_then(|v| match v {
+                    SqlExpr::Value(SqlValue::Number(n, _)) => n.parse().ok(),
+                    _ => None,
+                });
 
                 let mut order_by = Vec::new();
-                for expr in &query.order_by {
-                    order_by.push(Order(expr).try_into()?);
+                if let Some(orders) = &q.order_by {
+                    for expr in orders.exprs.iter() {
+                        order_by.push((
+                            match &expr.expr {
+                                SqlExpr::Identifier(id) => id.value.clone(),
+                                _ => return Err(anyhow!("Order by only support identifier")),
+                            },
+                            !expr.asc.unwrap_or(true),
+                        ));
+                    }
                 }
 
-                let offset = query.offset.as_ref().map(|v| Offset(v).into());
-                let limit = query
-                    .limit
-                    .as_ref()
-                    .map(|v| Limit(v).try_into())
-                    .transpose()?;
+                let mut selection = Vec::new();
+                let condition;
 
-                Ok(Sql {
-                    selection,
-                    condition,
-                    source,
-                    order_by,
-                    offset,
-                    limit,
-                })
+                if let SetExpr::Select(s) = &*q.body {
+                    for p in &s.projection {
+                        selection.push(Projection(p).try_into()?);
+                    }
+
+                    condition = s.selection
+                        .as_ref()
+                        .map(|v| Expression(Box::new(v.clone())).try_into())
+                        .transpose()?;
+
+                    Ok(Sql {
+                        selection,
+                        condition,
+                        source: Source(&s.from).try_into()?,
+                        order_by,
+                        offset,
+                        limit,
+                    })
+                } else {
+                    Err(anyhow!("Only support Select query"))
+                }
             }
-            _ => Err(anyhow!("Only SELECT queries are supported")),
+            _ => Err(anyhow!("Only support Query")),
         }
     }
 }
