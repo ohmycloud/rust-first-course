@@ -1,7 +1,10 @@
 use anyhow::{anyhow, Result};
 use polars::prelude::*;
 use sqlparser::parser::Parser;
-use std::{convert::TryInto, ops::{Deref, DerefMut}};
+use std::{
+    convert::TryInto,
+    ops::{Deref, DerefMut},
+};
 use tracing::info;
 
 mod convert;
@@ -56,11 +59,9 @@ pub async fn query<T: AsRef<str>>(sql: T) -> Result<DataFrame> {
     let df = match source {
         source if source.starts_with("http") => {
             let data = reqwest::get(source).await?.text().await?;
-            CsvReader::new(std::io::Cursor::new(data))
-                .finish()?
+            CsvReader::new(std::io::Cursor::new(data)).finish()?
         }
-        _ => CsvReader::new(std::fs::File::open(source)?)
-            .finish()?,
+        _ => CsvReader::new(std::fs::File::open(source)?).finish()?,
     };
 
     let mut filtered = match condition {
@@ -72,10 +73,13 @@ pub async fn query<T: AsRef<str>>(sql: T) -> Result<DataFrame> {
 
     // 处理 order by
     for (col, ascending) in order_by {
-        filtered = filtered.sort(vec![col], SortMultipleOptions {
-            descending: vec![!ascending],
-            ..Default::default()
-        });
+        filtered = filtered.sort(
+            vec![col],
+            SortMultipleOptions {
+                descending: vec![!ascending],
+                ..Default::default()
+            },
+        );
     }
 
     if let Some(offset) = offset {
@@ -90,6 +94,16 @@ pub async fn query<T: AsRef<str>>(sql: T) -> Result<DataFrame> {
     Ok(filtered.collect()?.into())
 }
 
+pub fn example_sql() -> String {
+    let url = "https://raw.githubusercontent.com/owid/covid-19-data/master/public/data/latest/owid-covid-latest.csv";
+    let sql = format!(
+        "SELECT location name, total_cases, new_cases, total_deaths, new_deaths \
+        FROM {} where new_deaths >= 100 ORDER BY new_cases DESC LIMIT 6",
+        url
+    );
+    sql
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -98,7 +112,8 @@ mod tests {
     #[tokio::test]
     async fn query_covid() -> Result<()> {
         // 设置日志
-        fmt().with_test_writer()
+        fmt()
+            .with_test_writer()
             .with_env_filter(EnvFilter::from_default_env())
             .init();
 
