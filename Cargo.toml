@@ -1,5 +1,5 @@
 [workspace]
-members = ["httpie", "queryer", "ch08", "queryer-py", "xunmi-py"]
+members = ["httpie", "queryer", "ch08", "queryer-py", "xunmi-py", "lab"]
 resolver = "2"
 
 [workspace.dependencies]
