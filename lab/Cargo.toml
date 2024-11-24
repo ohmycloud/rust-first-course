@@ -4,4 +4,9 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
+anyhow.workspace = true
+bytes.workspace = true
+futures.workspace = true
 rocket = { workspace = true }
+tokio = { workspace = true }
+tokio-util = { workspace = true }
