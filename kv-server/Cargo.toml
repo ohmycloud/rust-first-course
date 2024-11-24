@@ -8,6 +8,7 @@ course-proto = { path = "../course-proto", version = "0.1.0" }
 bytes = { workspace = true }
 tracing = { workspace = true }
 prost.workspace = true
+thiserror = "2.0.3"
 
 [dev-dependencies]
 anyhow = { workspace = true }
