@@ -10,6 +10,7 @@ tracing = { workspace = true }
 prost.workspace = true
 thiserror = "2.0.3"
 anyhow = { workspace = true }
+dashmap = { workspace = true }
 
 [dev-dependencies]
 tokio = { workspace = true }
